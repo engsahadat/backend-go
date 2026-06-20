@@ -14,7 +14,7 @@ func SendVerificationEmail(toEmail, toName, token string) error {
 	frontendURL := os.Getenv("FRONTEND_URL")
 	if frontendURL == "" {
 		if os.Getenv("RENDER") == "true" {
-			frontendURL = "https://ai-employee-nu-eight.vercel.app"
+			frontendURL = "https://www.bdaiemployee.com"
 		} else {
 			frontendURL = "http://localhost:3000"
 		}
