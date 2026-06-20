@@ -11,7 +11,16 @@ import (
 // SendVerificationEmail sends a verification email to the user.
 // If SMTP environment variables are not set, it prints the verification link to the console logs.
 func SendVerificationEmail(toEmail, toName, token string) error {
-	verifyURL := fmt.Sprintf("http://localhost:3000/verify-email?token=%s", token)
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		if os.Getenv("RENDER") == "true" {
+			frontendURL = "https://ai-employee-nu-eight.vercel.app"
+		} else {
+			frontendURL = "http://localhost:3000"
+		}
+	}
+	frontendURL = strings.TrimSuffix(frontendURL, "/")
+	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", frontendURL, token)
 
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
@@ -19,6 +28,9 @@ func SendVerificationEmail(toEmail, toName, token string) error {
 	smtpPass := os.Getenv("SMTP_PASSWORD")
 	smtpFrom := os.Getenv("SMTP_FROM")
 
+	if smtpFrom == "" {
+		smtpFrom = smtpUser
+	}
 	if smtpFrom == "" {
 		smtpFrom = "no-reply@aiemployee.com"
 	}
@@ -44,6 +56,22 @@ func SendVerificationEmail(toEmail, toName, token string) error {
 
 	addr := fmt.Sprintf("%s:%s", smtpHost, smtpPort)
 	if err := smtp.SendMail(addr, auth, smtpFrom, []string{toEmail}, msg); err != nil {
+		// If SMTP send fails (e.g. unverified sender 'short write' on Brevo),
+		// retry using smtpUser which is guaranteed to be a verified sender for the authenticated user.
+		if smtpFrom != smtpUser && smtpUser != "" {
+			log.Printf("⚠️ SMTP sending failed with sender %s (%v). Retrying with authenticated user %s...\n", smtpFrom, err, smtpUser)
+			msgRetry := []byte("To: " + toEmail + "\r\n" +
+				"From: " + smtpUser + "\r\n" +
+				"Subject: " + subject + "\r\n" +
+				"\r\n" +
+				body + "\r\n")
+			if retryErr := smtp.SendMail(addr, auth, smtpUser, []string{toEmail}, msgRetry); retryErr == nil {
+				log.Printf("📧 Verification email successfully sent to %s via SMTP using fallback authenticated user sender\n", toEmail)
+				return nil
+			} else {
+				err = fmt.Errorf("retry with smtpUser failed: %w (original error: %v)", retryErr, err)
+			}
+		}
 		return fmt.Errorf("failed to send smtp mail: %w", err)
 	}
 
