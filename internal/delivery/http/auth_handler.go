@@ -1,8 +1,13 @@
 package http
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/your-org/ai-employee-platform/internal/domain"
 	"github.com/your-org/ai-employee-platform/internal/repository"
@@ -17,6 +22,7 @@ func RegisterAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/verify-email", handleVerifyEmail)
 	mux.HandleFunc("/api/auth/resend-verification", handleResendVerification)
 	mux.HandleFunc("/api/auth/test-smtp", handleTestSMTP)
+	mux.HandleFunc("/api/auth/test-gemini", handleTestGemini)
 	mux.Handle("/api/auth/me", AuthMiddleware(http.HandlerFunc(handleMe)))
 }
 
@@ -173,5 +179,76 @@ func handleTestSMTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "success",
 		"message": "Test email sent successfully to " + email,
+	})
+}
+
+// GET /api/auth/test-gemini
+func handleTestGemini(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, domain.ErrorResponse{Error: "method not allowed"})
+		return
+	}
+
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"status": "failed",
+			"error":  "GEMINI_API_KEY environment variable is empty",
+		})
+		return
+	}
+
+	// Simple request payload
+	geminiReq := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{
+				"parts": []map[string]interface{}{
+					{"text": "Hello, respond in one word: OK"},
+				},
+			},
+		},
+	}
+
+	jsonData, err := json.Marshal(geminiReq)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"status": "failed",
+			"error":  fmt.Sprintf("marshal error: %v", err),
+		})
+		return
+	}
+
+	apiURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=%s", apiKey)
+	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"status": "failed",
+			"error":  fmt.Sprintf("new request error: %v", err),
+		})
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"status": "failed",
+			"error":  fmt.Sprintf("client Do error: %v", err),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	
+	// Set status code to match the API response status code for debugging
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	
+	writeJSON(w, resp.StatusCode, map[string]interface{}{
+		"status":      "response_received",
+		"status_code": resp.StatusCode,
+		"body":        string(bodyBytes),
 	})
 }
