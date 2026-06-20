@@ -26,11 +26,11 @@ func SendVerificationEmail(toEmail, toName, token string) error {
 	frontendURL = strings.TrimSuffix(frontendURL, "/")
 	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", frontendURL, token)
 
-	smtpHost := os.Getenv("SMTP_HOST")
-	smtpPort := os.Getenv("SMTP_PORT")
-	smtpUser := os.Getenv("SMTP_USER")
-	smtpPass := os.Getenv("SMTP_PASSWORD")
-	smtpFrom := os.Getenv("SMTP_FROM")
+	smtpHost := strings.TrimSpace(os.Getenv("SMTP_HOST"))
+	smtpPort := strings.TrimSpace(os.Getenv("SMTP_PORT"))
+	smtpUser := strings.TrimSpace(os.Getenv("SMTP_USER"))
+	smtpPass := strings.TrimSpace(os.Getenv("SMTP_PASSWORD"))
+	smtpFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
 
 	if smtpFrom == "" {
 		smtpFrom = smtpUser
