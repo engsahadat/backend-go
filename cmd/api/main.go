@@ -636,6 +636,16 @@ func main() {
 		})
 	})))
 
-	log.Println("✅ Backend running on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", corsMiddleware(mux)))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	if os.Getenv("RENDER") == "true" {
+		log.Printf("✅ Backend running on Render (internal port %s)\n", port)
+	} else {
+		log.Printf("✅ Backend running on http://localhost:%s\n", port)
+	}
+
+	log.Fatal(http.ListenAndServe(":"+port, corsMiddleware(mux)))
 }
