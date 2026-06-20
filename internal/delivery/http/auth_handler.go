@@ -16,6 +16,7 @@ func RegisterAuthRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/google", handleGoogleLogin)
 	mux.HandleFunc("/api/auth/verify-email", handleVerifyEmail)
 	mux.HandleFunc("/api/auth/resend-verification", handleResendVerification)
+	mux.HandleFunc("/api/auth/test-smtp", handleTestSMTP)
 	mux.Handle("/api/auth/me", AuthMiddleware(http.HandlerFunc(handleMe)))
 }
 
@@ -145,4 +146,32 @@ func handleResendVerification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Verification link sent successfully"})
+}
+
+// GET /api/auth/test-smtp
+func handleTestSMTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, domain.ErrorResponse{Error: "method not allowed"})
+		return
+	}
+
+	email := r.URL.Query().Get("email")
+	if email == "" {
+		writeJSON(w, http.StatusBadRequest, domain.ErrorResponse{Error: "email query parameter is required"})
+		return
+	}
+
+	err := service.SendVerificationEmail(email, "Test User", "test-token-12345")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "success",
+		"message": "Test email sent successfully to " + email,
+	})
 }
