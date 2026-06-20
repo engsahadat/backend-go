@@ -50,13 +50,11 @@ func SendVerificationEmail(toEmail, toName, token string) error {
 		return nil
 	}
 
-	// 1. If running on Render, standard SMTP ports are blocked.
-	// We use Brevo's HTTP API directly, which is extremely fast and reliable.
-	isRender := os.Getenv("RENDER") == "true"
+	// 1. We use Brevo's HTTP API directly if available, which is extremely fast and reliable.
 	isBrevoKey := strings.HasPrefix(smtpPass, "xsmtpsib-")
 
-	if isRender && isBrevoKey {
-		log.Println("🚀 Render environment detected. Sending email via Brevo HTTP API...")
+	if isBrevoKey {
+		log.Println("🚀 Brevo API Key detected. Sending email via Brevo HTTP API...")
 		if err := sendViaBrevoAPI(toEmail, toName, subject, body, smtpFrom, smtpPass); err == nil {
 			log.Printf("📧 Verification email successfully sent to %s via Brevo HTTP API\n", toEmail)
 			return nil

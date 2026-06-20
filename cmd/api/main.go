@@ -99,13 +99,35 @@ func SaveFile(base64Data string, mimeType string) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf("http://localhost:8080/uploads/%s%s", filename, ext), nil
+	baseURL := os.Getenv("BACKEND_URL")
+	if baseURL == "" {
+		if os.Getenv("RENDER") == "true" {
+			baseURL = "https://backend-go-9hto.onrender.com"
+		} else {
+			baseURL = "http://localhost:8080"
+		}
+	}
+
+	return fmt.Sprintf("%s/uploads/%s%s", baseURL, filename, ext), nil
 }
 
 // corsMiddleware adds CORS headers to every response.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		allowedOrigins := map[string]bool{
+			"http://localhost:3000":        true,
+			"https://www.bdaiemployee.com": true,
+			"https://bdaiemployee.com":     true,
+		}
+
+		if allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			// Fallback to wildcard for external API tests, or strict it
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
@@ -279,7 +301,7 @@ func main() {
 
 		rows, err := database.DB.Query(`
 			SELECT session_id, MIN(created_at) as start_time, 
-			       COALESCE((SELECT content FROM chat_history WHERE session_id = t.session_id AND role = 'user' ORDER BY created_at ASC LIMIT 1), 'Untitled Chat') as title
+			       COALESCE((SELECT content FROM chat_history WHERE session_id = t.session_id AND user_id = t.user_id AND role = 'user' ORDER BY created_at ASC LIMIT 1), 'Untitled Chat') as title
 			FROM chat_history t
 			WHERE user_id = ?
 			GROUP BY session_id
@@ -479,20 +501,70 @@ func main() {
 			return
 		}
 
-		apiURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=%s", apiKey)
-		httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
-		if err != nil {
-			log.Printf("❌ [chat] error creating outgoing request: %v", err)
-			http.Error(w, `{"error":"failed to prepare AI request"}`, http.StatusInternalServerError)
-			return
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
+		apiURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=%s", apiKey)
+		
+		var resp *http.Response
+		var lastErr error
+		maxRetries := 3
+		backoff := 1 * time.Second
 
-		client := &http.Client{Timeout: 30 * time.Second}
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			log.Printf("❌ [chat] error calling Gemini API: %v", err)
-			http.Error(w, `{"error":"failed to connect to AI service"}`, http.StatusInternalServerError)
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			bodyReader := bytes.NewReader(jsonData)
+			httpReq, err := http.NewRequest("POST", apiURL, bodyReader)
+			if err != nil {
+				log.Printf("❌ [chat] error creating outgoing request: %v", err)
+				http.Error(w, `{"error":"failed to prepare AI request"}`, http.StatusInternalServerError)
+				return
+			}
+			httpReq.Header.Set("Content-Type", "application/json")
+
+			client := &http.Client{Timeout: 60 * time.Second}
+			resp, lastErr = client.Do(httpReq)
+			
+			if lastErr != nil {
+				log.Printf("⚠️ [chat] Gemini API call attempt %d failed: %v", attempt, lastErr)
+				if attempt < maxRetries {
+					time.Sleep(backoff)
+					backoff *= 2
+					continue
+				}
+				break
+			}
+
+			// If success, we break
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+			
+			// Retry on rate limit (429) or server errors (5xx)
+			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				log.Printf("⚠️ [chat] Gemini API returned status %d on attempt %d: %s", resp.StatusCode, attempt, string(bodyBytes))
+				lastErr = fmt.Errorf("Gemini API returned status %d", resp.StatusCode)
+				if attempt < maxRetries {
+					time.Sleep(backoff)
+					backoff *= 2
+					continue
+				}
+				resp = nil
+				break
+			}
+			
+			// Do not retry on client errors (400, etc.)
+			break
+		}
+
+		if lastErr != nil {
+			log.Printf("❌ [chat] error calling Gemini API after %d attempts: %v", maxRetries, lastErr)
+			if resp != nil {
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				log.Printf("❌ [chat] Gemini API error response: %s", string(bodyBytes))
+				http.Error(w, fmt.Sprintf(`{"error":"AI service error: status %d"}`, resp.StatusCode), resp.StatusCode)
+			} else {
+				http.Error(w, `{"error":"failed to connect to AI service after multiple attempts"}`, http.StatusInternalServerError)
+			}
 			return
 		}
 		defer resp.Body.Close()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -218,23 +219,62 @@ func handleTestGemini(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=%s", apiKey)
-	httpReq, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
-			"status": "failed",
-			"error":  fmt.Sprintf("new request error: %v", err),
-		})
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	apiURL := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=%s", apiKey)
+	
+	var resp *http.Response
+	var lastErr error
+	maxRetries := 3
+	backoff := 1 * time.Second
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		bodyReader := bytes.NewReader(jsonData)
+		httpReq, err := http.NewRequest("POST", apiURL, bodyReader)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+				"status": "failed",
+				"error":  fmt.Sprintf("new request error on attempt %d: %v", attempt, err),
+			})
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 60 * time.Second}
+		resp, lastErr = client.Do(httpReq)
+		if lastErr != nil {
+			log.Printf("⚠️ [test-gemini] Gemini API call attempt %d failed: %v", attempt, lastErr)
+			if attempt < maxRetries {
+				time.Sleep(backoff)
+				backoff *= 2
+				continue
+			}
+			break
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			log.Printf("⚠️ [test-gemini] Gemini API returned status %d on attempt %d: %s", resp.StatusCode, attempt, string(bodyBytes))
+			lastErr = fmt.Errorf("Gemini API returned status %d", resp.StatusCode)
+			if attempt < maxRetries {
+				time.Sleep(backoff)
+				backoff *= 2
+				continue
+			}
+			resp = nil
+			break
+		}
+
+		break
+	}
+
+	if lastErr != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
 			"status": "failed",
-			"error":  fmt.Sprintf("client Do error: %v", err),
+			"error":  fmt.Sprintf("client Do error after %d attempts: %v", maxRetries, lastErr),
 		})
 		return
 	}
