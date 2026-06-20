@@ -1,0 +1,26 @@
+# Compiled binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+api-server
+api
+
+# Test binaries
+*.test
+
+# Go coverage output
+*.out
+
+# Local environment config
+.env
+.env.local
+.env.*.local
+
+# SQLite database and app data
+data/*.db
+data/aiemployee.db
+
+# User uploaded media/files
+uploads/
