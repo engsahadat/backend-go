@@ -1,18 +1,18 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/api/idtoken"
 
 	"github.com/your-org/ai-employee-platform/internal/domain"
 	"github.com/your-org/ai-employee-platform/internal/repository"
@@ -176,23 +176,36 @@ func LoginWithGoogle(idToken string) (*domain.AuthResponse, error) {
 	return &domain.AuthResponse{Token: token, User: *user}, nil
 }
 
-// verifyGoogleToken calls Google's tokeninfo endpoint to validate the ID token.
-func verifyGoogleToken(idToken string) (*GoogleUserInfo, error) {
-	resp, err := http.Get("https://oauth2.googleapis.com/tokeninfo?id_token=" + idToken)
+// verifyGoogleToken verifies the Google ID token locally using cached Google public keys.
+func verifyGoogleToken(idTokenStr string) (*GoogleUserInfo, error) {
+	payload, err := idtoken.Validate(context.Background(), idTokenStr, "")
 	if err != nil {
-		return nil, fmt.Errorf("call google: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New("invalid google token")
+		return nil, fmt.Errorf("validate google token: %w", err)
 	}
 
-	var info GoogleUserInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("decode google response: %w", err)
+	sub, okSub := payload.Claims["sub"].(string)
+	email, okEmail := payload.Claims["email"].(string)
+
+	if !okSub || !okEmail {
+		return nil, errors.New("invalid google token claims")
 	}
-	return &info, nil
+
+	info := &GoogleUserInfo{
+		Sub:   sub,
+		Email: email,
+	}
+
+	if name, ok := payload.Claims["name"].(string); ok {
+		info.Name = name
+	}
+	if picture, ok := payload.Claims["picture"].(string); ok {
+		info.Picture = picture
+	}
+	if expFloat, ok := payload.Claims["exp"].(float64); ok {
+		info.ExpiresIn = int(expFloat - float64(time.Now().Unix()))
+	}
+
+	return info, nil
 }
 
 // ---------- JWT Helpers ----------
