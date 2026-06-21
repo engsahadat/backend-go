@@ -60,22 +60,19 @@ func Register(req domain.RegisterRequest) (*domain.AuthResponse, error) {
 		Name:              strings.TrimSpace(req.Name),
 		PasswordHash:      string(hash),
 		Provider:          "email",
-		IsVerified:        false,
+		IsVerified:        true,
 		VerificationToken: verificationToken,
 	}
 	if err := repository.CreateUser(user); err != nil {
 		return nil, err
 	}
 
-	// Send verification email asynchronously so it doesn't block registration response
-	go func() {
-		if err := SendVerificationEmail(user.Email, user.Name, verificationToken); err != nil {
-			log.Printf("❌ Failed to send verification email: %v", err)
-		}
-	}()
+	token, err := generateJWT(user)
+	if err != nil {
+		return nil, err
+	}
 
-	// Do NOT generate JWT token upon registration since the user is not yet verified.
-	return &domain.AuthResponse{Token: "", User: *user}, nil
+	return &domain.AuthResponse{Token: token, User: *user}, nil
 }
 
 // Login verifies credentials and returns a JWT.
@@ -99,9 +96,10 @@ func Login(req domain.LoginRequest) (*domain.AuthResponse, error) {
 		return nil, errors.New("invalid email or password")
 	}
 
-	if !user.IsVerified {
-		return nil, errors.New("please verify your email to log in")
-	}
+	// Removed verification check to allow all users to log in
+	// if !user.IsVerified {
+	// 	return nil, errors.New("please verify your email to log in")
+	// }
 
 	token, err := generateJWT(user)
 	if err != nil {
